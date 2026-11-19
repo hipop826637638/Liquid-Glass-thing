@@ -82,6 +82,22 @@ jobs:
           brew install ldid make
           echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
 
+      - name: build AltList (${{ matrix.scheme }})
+        run: |
+          SCHEME_FLAG=""
+          if [ "${{ matrix.scheme }}" = "rootless" ]; then
+            SCHEME_FLAG="THEOS_PACKAGE_SCHEME=rootless"
+          elif [ "${{ matrix.scheme }}" = "roothide" ]; then
+            SCHEME_FLAG="THEOS_PACKAGE_SCHEME=roothide"
+          fi
+          git clone --depth 1 https://github.com/opa334/AltList.git "$RUNNER_TEMP/AltList"
+          make -C "$RUNNER_TEMP/AltList" FINALPACKAGE=1 $SCHEME_FLAG
+          FW=$(find "$RUNNER_TEMP/AltList/.theos/obj" -maxdepth 3 -type d -name AltList.framework | head -n 1)
+          test -n "$FW" && test -f "$FW/Headers/ATLApplicationListMultiSelectionController.h"
+          mkdir -p "$THEOS/lib/iphone/rootless"
+          cp -R "$FW" "$THEOS/lib/"
+          cp -R "$FW" "$THEOS/lib/iphone/rootless/"
+
       - name: build (${{ matrix.scheme }})
         run: |
           SCHEME_FLAG=""
