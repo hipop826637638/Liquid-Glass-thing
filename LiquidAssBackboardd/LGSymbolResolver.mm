@@ -565,6 +565,8 @@ int LGResolve_RenderVtableSlot(void * const *vtable, int maxSlots) {
     return -1;
 }
 
+static const int kLGEdgeInfoScanWindow = 256;
+
 int LGResolve_EdgeInfoVtableSlot(void * const *vtable, int maxSlots) {
     // identify edge info by its argument saves and two output writes
     if (!vtable) return -1;
@@ -577,13 +579,15 @@ int LGResolve_EdgeInfoVtableSlot(void * const *vtable, int maxSlots) {
         bool savesFlag = false;
         bool writesEdge = false;
         bool writesFlag = false;
-        for (int k = 0; k < 80; k++) {
+        // scan the whole function: newer builds have an early-exit ret before
+        // the output writes, so stop at the next function's pacibsp instead
+        for (int k = 0; k < kLGEdgeInfoScanWindow; k++) {
             uint32_t ins = fn[k];
+            if (k > 0 && ins == 0xD503237Fu) break;
             if (ins == 0xAA0503F7u) savesEdge = true;
             if (ins == 0xAA0603F4u) savesFlag = true;
             if (ins == 0x2D0002E1u) writesEdge = true;
             if (ins == 0x39000288u) writesFlag = true;
-            if (ins == 0xD65F03C0u || ins == 0xD65F0FFFu) break;
         }
         if (savesEdge && savesFlag && writesEdge && writesFlag) {
             rlog("edge-info-slot: Gaussian get_edge_info at vtable[%d]", i);
@@ -603,9 +607,9 @@ int LGResolve_EdgeInfoVtableSlot(void * const *vtable, int maxSlots) {
         uint32_t flagRegs = 1u << 6;
         bool writesEdge = false;
         bool writesFlag = false;
-        for (int k = 0; k < 96; k++) {
+        for (int k = 0; k < kLGEdgeInfoScanWindow; k++) {
             uint32_t ins = fn[k];
-            if (ins == 0xD65F03C0u || ins == 0xD65F0FFFu) break;
+            if (k > 0 && ins == 0xD503237Fu) break;
             // mov xD, x5 / mov xD, x6 (also 32-bit forms for the flag)
             if ((ins & 0xFFFFFFE0u) == 0xAA0503E0u) { edgeRegs |= 1u << (ins & 0x1Fu); continue; }
             if ((ins & 0xFFFFFFE0u) == 0xAA0603E0u ||
