@@ -68,11 +68,11 @@ jobs:
       - name: download sdks
         if: steps.cache-sdks.outputs.cache-hit != 'true'
         run: |
-          curl -LO https://github.com/theos/sdks/archive/master.zip
-          unzip -q master.zip
+          # unzip on macOS runners fails on the SDK symlinks, so clone instead
+          git clone --depth 1 https://github.com/theos/sdks.git sdks-master
           mkdir -p theos/sdks
           mv sdks-master/*.sdk theos/sdks/
-          rm -rf master.zip sdks-master
+          rm -rf sdks-master
 
       - name: set THEOS env var
         run: echo "THEOS=$GITHUB_WORKSPACE/theos" >> $GITHUB_ENV
