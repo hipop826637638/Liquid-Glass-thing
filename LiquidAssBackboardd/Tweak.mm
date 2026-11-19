@@ -28,7 +28,8 @@
 #endif
 
 // apparently the only path backboardd could write to outside /tmp/ or /var/jb/*
-#define LG_LOG_PATH "/var/mobile/Library/Accessibility/liquidglass.log"
+// own file: SpringBoard writes liquidglass.log from a cached offset and clobbers our lines
+#define LG_LOG_PATH "/var/mobile/Library/Accessibility/liquidglass-backboardd.log"
 #define LG_SAFE_MODE_LOG_PATH "/var/mobile/Library/Accessibility/liquidass-safemode.log"
 #define LG_SAFE_MODE_STATE_PATH "/var/mobile/Library/Accessibility/liquidass-backboardd-guard.bin"
 #define LG_SAFE_MODE_PENDING_PATH "/var/mobile/Library/Accessibility/liquidass-backboardd-alert"
@@ -1670,9 +1671,22 @@ static uint64_t ourCustomEdgeInfo(void *self, void *filter, void *layer,
 static uint64_t ourGaussianEdgeInfoHook(void *self, void *filter, void *layer,
                                         void *ctx, void *bounds,
                                         simd_float2 *edge, bool *flag) {
-    return g_origGaussEdgeInfo
+    uint32_t atom = filter
+        ? *(uint32_t *)((uint8_t *)filter + g_filterAtomOffset) : 0;
+    bool custom = lgIsCustomAtom(atom);
+    static int sCustomTraces = 0;
+    bool trace = custom && __sync_fetch_and_add(&sCustomTraces, 1) < 3;
+    if (trace)
+        lglog("edge-info: custom ENTER atom=0x%x self=%p filter=%p layer=%p ctx=%p bounds=%p edge=%p flag=%p",
+              atom, self, filter, layer, ctx, bounds, (void *)edge, (void *)flag);
+    uint64_t result = g_origGaussEdgeInfo
         ? g_origGaussEdgeInfo(self, filter, layer, ctx, bounds, edge, flag)
         : 0;
+    if (trace)
+        lglog("edge-info: custom RETURN atom=0x%x result=%#llx edge=(%.2f,%.2f) flag=%d",
+              atom, (unsigned long long)result,
+              edge ? (*edge).x : -1.0f, edge ? (*edge).y : -1.0f, flag ? (int)*flag : -1);
+    return result;
 }
 
 static void ourGaussianRenderHook(void *self, void *filter, void *layer, void *ctx,

@@ -46,7 +46,8 @@ void *LGSymStripData(void *dataAddr) {
 #endif
 }
 
-#define LG_LOG_PATH "/var/mobile/Library/Accessibility/liquidglass.log"
+// own file: SpringBoard writes liquidglass.log from a cached offset and clobbers our lines
+#define LG_LOG_PATH "/var/mobile/Library/Accessibility/liquidglass-backboardd.log"
 static void rlog(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 extern bool gLGBackboardDebugLogging;
 
