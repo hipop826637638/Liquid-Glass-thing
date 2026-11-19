@@ -599,35 +599,61 @@ int LGResolve_EdgeInfoVtableSlot(void * const *vtable, int maxSlots) {
     // compiler picks different registers, so match the pattern register-agnostic:
     // copy x5 (edge out) and x6 (flag out) into callee-saved regs, then store a
     // pair of floats through the edge pointer and a byte through the flag pointer
+    int shapeCandidate = -1;
+    int shapeCandidates = 0;
     for (int i = 0; i < maxSlots; i++) {
         uint32_t *fn = (uint32_t *)LGSymStripCode(vtable[i]);
         if (!fn || !LGSymAddressInQuartzCoreImage((void *)fn)) continue;
 
         uint32_t edgeRegs = 1u << 5;
         uint32_t flagRegs = 1u << 6;
+        bool movesEdge = false, movesFlag = false, movesX7 = false;
         bool writesEdge = false;
         bool writesFlag = false;
         for (int k = 0; k < kLGEdgeInfoScanWindow; k++) {
             uint32_t ins = fn[k];
             if (k > 0 && ins == 0xD503237Fu) break;
             // mov xD, x5 / mov xD, x6 (also 32-bit forms for the flag)
-            if ((ins & 0xFFFFFFE0u) == 0xAA0503E0u) { edgeRegs |= 1u << (ins & 0x1Fu); continue; }
+            if ((ins & 0xFFFFFFE0u) == 0xAA0503E0u) { edgeRegs |= 1u << (ins & 0x1Fu); movesEdge = true; continue; }
             if ((ins & 0xFFFFFFE0u) == 0xAA0603E0u ||
-                (ins & 0xFFFFFFE0u) == 0x2A0603E0u) { flagRegs |= 1u << (ins & 0x1Fu); continue; }
+                (ins & 0xFFFFFFE0u) == 0x2A0603E0u) { flagRegs |= 1u << (ins & 0x1Fu); movesFlag = true; continue; }
+            if ((ins & 0xFFFFFFE0u) == 0xAA0703E0u) { movesX7 = true; continue; }
             uint32_t rn = (ins >> 5) & 0x1Fu;
-            // stp sA, sB, [xN, #imm] (32-bit fp pair, signed offset)
-            if ((ins & 0xFFC00000u) == 0x2D000000u && ((edgeRegs >> rn) & 1u)) writesEdge = true;
-            // strb wT, [xN, #imm]
-            if ((ins & 0xFFC00000u) == 0x39000000u && ((flagRegs >> rn) & 1u)) writesFlag = true;
+            bool viaEdge = (edgeRegs >> rn) & 1u;
+            bool viaFlag = (flagRegs >> rn) & 1u;
+            // float2 out: stp sA,sB / str dA / str sA / stur dA / stur sA / str xA
+            if (viaEdge && ((ins & 0xFFC00000u) == 0x2D000000u ||
+                            (ins & 0xFFC00000u) == 0xFD000000u ||
+                            (ins & 0xFFC00000u) == 0xBD000000u ||
+                            (ins & 0xFFE00C00u) == 0xFC000000u ||
+                            (ins & 0xFFE00C00u) == 0xBC000000u ||
+                            (ins & 0xFFC00000u) == 0xF9000000u)) writesEdge = true;
+            // bool out: strb / sturb
+            if (viaFlag && ((ins & 0xFFC00000u) == 0x39000000u ||
+                            (ins & 0xFFE00C00u) == 0x38000000u)) writesFlag = true;
         }
         if (writesEdge && writesFlag) {
             rlog("edge-info-slot: Gaussian get_edge_info at vtable[%d] (register-agnostic match)", i);
             return i;
         }
+        // get_edge_info takes exactly 7 args (edge out in x5, flag out in x6);
+        // render takes more and also saves x7, so the 7-arg shape is distinctive
+        if (movesEdge && movesFlag && !movesX7) {
+            shapeCandidate = i;
+            shapeCandidates++;
+            rlog("edge-info-slot: vtable[%d] has get_edge_info argument shape (writesEdge=%d writesFlag=%d)",
+                 i, writesEdge, writesFlag);
+        }
+    }
+
+    if (shapeCandidates == 1) {
+        rlog("edge-info-slot: Gaussian get_edge_info at vtable[%d] (argument-shape match)", shapeCandidate);
+        return shapeCandidate;
     }
 
     // still nothing: dump the start of each slot so the pattern can be updated
-    rlog("edge-info-slot: get_edge_info not found (checked %d slots)", maxSlots);
+    rlog("edge-info-slot: get_edge_info not found (checked %d slots, %d shape candidates)",
+         maxSlots, shapeCandidates);
     for (int i = 0; i < maxSlots; i++) {
         uint32_t *fn = (uint32_t *)LGSymStripCode(vtable[i]);
         if (!fn || !LGSymAddressInQuartzCoreImage((void *)fn)) {
