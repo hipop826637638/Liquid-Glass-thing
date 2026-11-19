@@ -134,11 +134,27 @@ static CGFloat LGActionButtonRadius(UIView *material) {
     return CGRectGetHeight(button.bounds) * 0.5;
 }
 
+// live activities are reparented and resized every frame while being swiped
+// away; installing glass on them feeds a layout loop that hangs SpringBoard
+static BOOL LGIsLiveActivityMaterial(UIView *material) {
+    for (UIView *v = material.superview; v; v = v.superview) {
+        NSString *name = NSStringFromClass(v.class);
+        if ([name rangeOfString:@"Activity" options:NSCaseInsensitiveSearch].location != NSNotFound)
+            return YES;
+    }
+    return NO;
+}
+
 static void LGUpdatePlatterGlass(UIView *material) {
     // one platter class serves banners notifications and action buttons
 
     if (!material.window) return;
     CFTimeInterval start = CACurrentMediaTime();
+
+    if (LGIsLiveActivityMaterial(material)) {
+        LGRemoveGlassFromMaterial(material, kGlassKey);
+        return;
+    }
 
     if (LGIsPlatterMaterial(material)) {
         BOOL topBanner = LGIsTopBannerPresentation(material);
@@ -162,6 +178,25 @@ static void LGUpdatePlatterGlass(UIView *material) {
     LGNotificationProfileSample(CACurrentMediaTime() - start);
 }
 
+static void *kLGPlatterUpdatePendingKey = &kLGPlatterUpdatePendingKey;
+
+// layout passes can come back-to-back (our own frame/hidden changes trigger
+// more of them), so run at most one glass update per material per runloop
+static void LGSchedulePlatterGlassUpdate(UIView *material) {
+    if (!material.window) return;
+    if (objc_getAssociatedObject(material, kLGPlatterUpdatePendingKey)) return;
+    objc_setAssociatedObject(material, kLGPlatterUpdatePendingKey, @YES,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    __weak UIView *weakMaterial = material;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIView *strongMaterial = weakMaterial;
+        if (!strongMaterial) return;
+        objc_setAssociatedObject(strongMaterial, kLGPlatterUpdatePendingKey, nil,
+                                 OBJC_ASSOCIATION_ASSIGN);
+        LGUpdatePlatterGlass(strongMaterial);
+    });
+}
+
 %hook MTMaterialView
 - (void)didMoveToWindow {
     %orig;
@@ -170,7 +205,7 @@ static void LGUpdatePlatterGlass(UIView *material) {
 }
 - (void)layoutSubviews {
     %orig;
-    LGUpdatePlatterGlass((UIView *)self);
+    LGSchedulePlatterGlassUpdate((UIView *)self);
 }
 %end
 

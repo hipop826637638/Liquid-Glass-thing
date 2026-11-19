@@ -590,7 +590,51 @@ int LGResolve_EdgeInfoVtableSlot(void * const *vtable, int maxSlots) {
             return i;
         }
     }
+
+    // newer QuartzCore builds (seen on iOS 18.7.x) keep the same shape but the
+    // compiler picks different registers, so match the pattern register-agnostic:
+    // copy x5 (edge out) and x6 (flag out) into callee-saved regs, then store a
+    // pair of floats through the edge pointer and a byte through the flag pointer
+    for (int i = 0; i < maxSlots; i++) {
+        uint32_t *fn = (uint32_t *)LGSymStripCode(vtable[i]);
+        if (!fn || !LGSymAddressInQuartzCoreImage((void *)fn)) continue;
+
+        uint32_t edgeRegs = 1u << 5;
+        uint32_t flagRegs = 1u << 6;
+        bool writesEdge = false;
+        bool writesFlag = false;
+        for (int k = 0; k < 96; k++) {
+            uint32_t ins = fn[k];
+            if (ins == 0xD65F03C0u || ins == 0xD65F0FFFu) break;
+            // mov xD, x5 / mov xD, x6 (also 32-bit forms for the flag)
+            if ((ins & 0xFFFFFFE0u) == 0xAA0503E0u) { edgeRegs |= 1u << (ins & 0x1Fu); continue; }
+            if ((ins & 0xFFFFFFE0u) == 0xAA0603E0u ||
+                (ins & 0xFFFFFFE0u) == 0x2A0603E0u) { flagRegs |= 1u << (ins & 0x1Fu); continue; }
+            uint32_t rn = (ins >> 5) & 0x1Fu;
+            // stp sA, sB, [xN, #imm] (32-bit fp pair, signed offset)
+            if ((ins & 0xFFC00000u) == 0x2D000000u && ((edgeRegs >> rn) & 1u)) writesEdge = true;
+            // strb wT, [xN, #imm]
+            if ((ins & 0xFFC00000u) == 0x39000000u && ((flagRegs >> rn) & 1u)) writesFlag = true;
+        }
+        if (writesEdge && writesFlag) {
+            rlog("edge-info-slot: Gaussian get_edge_info at vtable[%d] (register-agnostic match)", i);
+            return i;
+        }
+    }
+
+    // still nothing: dump the start of each slot so the pattern can be updated
     rlog("edge-info-slot: get_edge_info not found (checked %d slots)", maxSlots);
+    for (int i = 0; i < maxSlots; i++) {
+        uint32_t *fn = (uint32_t *)LGSymStripCode(vtable[i]);
+        if (!fn || !LGSymAddressInQuartzCoreImage((void *)fn)) {
+            rlog("edge-info-slot: vtable[%d] %p (outside QuartzCore)", i, (void *)fn);
+            continue;
+        }
+        rlog("edge-info-slot: vtable[%d] %p %08x %08x %08x %08x %08x %08x %08x %08x "
+             "%08x %08x %08x %08x %08x %08x %08x %08x",
+             i, (void *)fn, fn[0], fn[1], fn[2], fn[3], fn[4], fn[5], fn[6], fn[7],
+             fn[8], fn[9], fn[10], fn[11], fn[12], fn[13], fn[14], fn[15]);
+    }
     return -1;
 }
 
